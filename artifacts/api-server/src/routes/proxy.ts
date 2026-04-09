@@ -6,13 +6,13 @@ import { logger } from "../lib/logger";
 const router: IRouter = Router();
 
 const openai = new OpenAI({
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? "dummy",
+  baseURL: process.env["AI_INTEGRATIONS_OPENAI_BASE_URL"],
+  apiKey: process.env["AI_INTEGRATIONS_OPENAI_API_KEY"] ?? "dummy",
 });
 
 const anthropic = new Anthropic({
-  baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
-  apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY ?? "dummy",
+  baseURL: process.env["AI_INTEGRATIONS_ANTHROPIC_BASE_URL"],
+  apiKey: process.env["AI_INTEGRATIONS_ANTHROPIC_API_KEY"] ?? "dummy",
 });
 
 const OPENAI_MODELS = [
@@ -55,7 +55,11 @@ function maybePing(res: Response, lastPingRef: { t: number }, anthropicFormat: b
   }
 }
 
-function startKeepalive(res: Response, lastPingRef: { t: number }, anthropicFormat: boolean): ReturnType<typeof setInterval> {
+function startKeepalive(
+  res: Response,
+  lastPingRef: { t: number },
+  anthropicFormat: boolean,
+): ReturnType<typeof setInterval> {
   return setInterval(() => {
     maybePing(res, lastPingRef, anthropicFormat);
   }, 2000);
@@ -66,7 +70,7 @@ function verifyBearer(req: Request, res: Response): boolean {
   const bearerToken = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   const xApiKey = (req.headers["x-api-key"] as string) ?? "";
   const token = bearerToken || xApiKey;
-  if (!token || token !== process.env.PROXY_API_KEY) {
+  if (!token || token !== process.env["PROXY_API_KEY"]) {
     res.status(401).json({ error: { message: "Unauthorized", type: "authentication_error" } });
     return false;
   }
@@ -96,11 +100,16 @@ type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 type AnthropicMessage = Anthropic.MessageParam;
 
 function openAIToolsToAnthropic(tools: OpenAITool[]): AnthropicTool[] {
-  return tools.map((t) => ({
-    name: t.function.name,
-    description: t.function.description ?? "",
-    input_schema: t.function.parameters as Anthropic.Tool.InputSchema,
-  }));
+  return tools
+    .filter(
+      (t): t is OpenAI.Chat.Completions.ChatCompletionFunctionTool =>
+        t.type === "function",
+    )
+    .map((t) => ({
+      name: t.function.name,
+      description: t.function.description ?? "",
+      input_schema: t.function.parameters as Anthropic.Tool.InputSchema,
+    }));
 }
 
 function openAIToolChoiceToAnthropic(
@@ -110,8 +119,11 @@ function openAIToolChoiceToAnthropic(
   if (choice === "auto") return { type: "auto" };
   if (choice === "none") return { type: "auto" };
   if (choice === "required") return { type: "any" };
-  if (typeof choice === "object" && choice.function) {
-    return { type: "tool", name: choice.function.name };
+  if (typeof choice === "object" && "function" in choice) {
+    return {
+      type: "tool",
+      name: (choice as OpenAI.Chat.Completions.ChatCompletionNamedToolChoice).function.name,
+    };
   }
   return undefined;
 }
@@ -150,9 +162,10 @@ function openAIMessagesToAnthropic(
       }
       if ("tool_calls" in msg && msg.tool_calls) {
         for (const tc of msg.tool_calls) {
+          if (tc.type !== "function") continue;
           let input: Record<string, unknown> = {};
           try {
-            input = JSON.parse(tc.function.arguments);
+            input = JSON.parse(tc.function.arguments) as Record<string, unknown>;
           } catch {
             input = {};
           }
@@ -259,7 +272,19 @@ router.post("/chat/completions", async (req: Request, res: Response) => {
     [key: string]: unknown;
   };
 
-  const { model, messages, stream: streamRequested, tools, tool_choice, max_tokens: _mt, temperature, top_p, top_k, metadata, stop_sequences, thinking, ...restBody } = body;
+  const {
+    model,
+    messages,
+    stream: streamRequested,
+    tools,
+    tool_choice,
+    temperature,
+    top_p,
+    top_k,
+    metadata,
+    stop_sequences,
+    thinking,
+  } = body;
 
   const isLarge = estimateContentSize(body as unknown as Record<string, unknown>) > LARGE_REQUEST_THRESHOLD;
   const stream = streamRequested || isLarge;
@@ -379,7 +404,7 @@ router.post("/chat/completions", async (req: Request, res: Response) => {
 type AnthropicNativeMessage = {
   model: string;
   messages: AnthropicMessage[];
-  system?: string | Anthropic.Messages.SystemBlockParam[];
+  system?: string | Anthropic.TextBlockParam[];
   tools?: AnthropicTool[];
   tool_choice?: Anthropic.ToolChoice;
   max_tokens?: number;
@@ -398,13 +423,14 @@ function sanitizeMessages(messages: AnthropicMessage[]): AnthropicMessage[] {
   return messages.map((msg) => {
     if (msg.role !== "assistant") return msg;
     if (!Array.isArray(msg.content)) return msg;
-    const filtered = (msg.content as Array<Record<string, unknown>>).filter(
+    const content = msg.content as Array<{ type: string }>;
+    const filtered = content.filter(
       (block) => block.type !== "thinking" && block.type !== "redacted_thinking",
     );
     if (filtered.length === 0) {
-      return { ...msg, content: [{ type: "text", text: "" }] };
+      return { ...msg, content: [{ type: "text" as const, text: "" }] };
     }
-    return { ...msg, content: filtered };
+    return { ...msg, content: filtered as Anthropic.ContentBlockParam[] };
   });
 }
 
@@ -496,17 +522,15 @@ router.post("/messages", async (req: Request, res: Response) => {
 
           for await (const event of rawStream) {
             maybePing(res, lastPingRef, true);
-            res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+            res.write(`data: ${JSON.stringify(event)}\n\n`);
             flush(res);
           }
 
+          res.write("data: [DONE]\n\n");
           res.end();
-        } catch (streamErr) {
-          clearInterval(keepalive);
-          logger.error({ err: streamErr }, "Stream error in /v1/messages");
-          writeSSEError(res, streamErr);
+        } catch (err) {
+          writeSSEError(res, err);
           res.end();
-          return;
         } finally {
           clearInterval(keepalive);
         }
@@ -518,15 +542,25 @@ router.post("/messages", async (req: Request, res: Response) => {
         res.json(finalMessage);
       }
     } else if (isOpenAIModel(model)) {
-      const openAIMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
-      if (system && typeof system === "string") {
-        openAIMessages.push({ role: "system", content: system });
+      const oaiMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
+        anthropicMessages.map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: typeof m.content === "string" ? m.content : "",
+        }));
+
+      if (system) {
+        const systemText = typeof system === "string" ? system : "";
+        oaiMessages.unshift({ role: "system", content: systemText });
       }
-      for (const m of anthropicMessages) {
-        if (typeof m.content === "string") {
-          openAIMessages.push({ role: m.role as "user" | "assistant", content: m.content });
-        }
-      }
+
+      const oaiParams: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
+        model,
+        messages: oaiMessages,
+        ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
+        ...(temperature !== undefined ? { temperature } : {}),
+        ...(top_p !== undefined ? { top_p } : {}),
+        stream: false,
+      };
 
       if (stream) {
         res.setHeader("Content-Type", "text/event-stream");
@@ -540,63 +574,28 @@ router.post("/messages", async (req: Request, res: Response) => {
         req.on("close", () => clearInterval(keepalive));
 
         try {
-          const oaiStream = await openai.chat.completions.create({
-            model,
-            messages: openAIMessages,
-            max_tokens: maxTokens,
+          const streamReq = await openai.chat.completions.create({
+            ...oaiParams,
             stream: true,
-          });
+          } as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
 
-          const msgId = `msg_${Date.now()}`;
-          res.write(`event: message_start\ndata: ${JSON.stringify({
-            type: "message_start",
-            message: { id: msgId, type: "message", role: "assistant", content: [], model, stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } }
-          })}\n\n`);
-          res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })}\n\n`);
-          res.write(`event: ping\ndata: ${JSON.stringify({ type: "ping" })}\n\n`);
-
-          for await (const chunk of oaiStream) {
+          for await (const chunk of streamReq) {
             maybePing(res, lastPingRef, true);
-            const delta = chunk.choices[0]?.delta?.content ?? "";
-            if (delta) {
-              const event = { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: delta } };
-              res.write(`event: content_block_delta\ndata: ${JSON.stringify(event)}\n\n`);
-              flush(res);
-            }
+            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+            flush(res);
           }
 
-          res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n`);
-          res.write(`event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 0 } })}\n\n`);
-          res.write(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
+          res.write("data: [DONE]\n\n");
+          res.end();
+        } catch (err) {
+          writeSSEError(res, err);
           res.end();
         } finally {
           clearInterval(keepalive);
         }
       } else {
-        const completion = await openai.chat.completions.create({
-          model,
-          messages: openAIMessages,
-          max_tokens: maxTokens,
-          stream: false,
-        });
-
-        const text = completion.choices[0]?.message?.content ?? "";
-        const anthropicResponse: Anthropic.Message = {
-          id: completion.id,
-          type: "message",
-          role: "assistant",
-          content: [{ type: "text", text }],
-          model: completion.model,
-          stop_reason: "end_turn",
-          stop_sequence: null,
-          usage: {
-            input_tokens: completion.usage?.prompt_tokens ?? 0,
-            output_tokens: completion.usage?.completion_tokens ?? 0,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-          },
-        };
-        res.json(anthropicResponse);
+        const completion = await openai.chat.completions.create(oaiParams);
+        res.json(completion);
       }
     } else {
       res.status(400).json({ error: { message: `Unknown model: ${model}`, type: "invalid_request_error" } });
@@ -605,9 +604,6 @@ router.post("/messages", async (req: Request, res: Response) => {
     logger.error({ err }, "Proxy error in /v1/messages");
     if (!res.headersSent) {
       res.status(500).json({ error: { message: "Internal server error", type: "server_error" } });
-    } else {
-      writeSSEError(res, err);
-      try { res.end(); } catch {}
     }
   }
 });
