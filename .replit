@@ -30,3 +30,8 @@ externalPort = 80
 [[ports]]
 localPort = 24927
 externalPort = 3000
+
+[userenv]
+
+[userenv.production]
+PROXY_API_KEY = "d254b7ce76ab37b9401dc80a04ca144fc1c2c207f182f813d3594539bde9cb6f"

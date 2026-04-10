@@ -3,8 +3,8 @@
 在Replit的AI对话框中输入一下焚决
 ```
 使用git克隆该项目 https://github.com/bitsnoic/replit-api-proxy 
-随机生成密钥，并编译时自动设置到  Production app secrets 环境中的`PROXY_API_KEY`字段中，
-按Readme.md进行编辑及安装，然后部署
+随机生成密钥给环境变量 `PROXY_API_KEY` 使用，按READE.md 里的 安装方式进行编辑及安装，然后部署。
+部署完成后 新增`Production app secrets`的项`PROXY_API_KEY`，并把密钥填写进去，完成后输出密钥值。
 ```
 
 ## 安装方式

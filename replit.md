@@ -2,9 +2,7 @@
 
 ## Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
-
-This project is an AI API proxy server that exposes OpenAI-compatible endpoints and routes to either OpenAI or Anthropic behind the scenes. It uses Replit AI Integrations (no personal API keys required).
+pnpm workspace monorepo using TypeScript. This project is an AI API proxy gateway that proxies requests to OpenAI and Anthropic models via Replit AI Integrations.
 
 ## Stack
 
@@ -17,7 +15,18 @@ This project is an AI API proxy server that exposes OpenAI-compatible endpoints 
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
-- **AI SDKs**: openai, @anthropic-ai/sdk (via Replit AI Integrations)
+- **AI Integrations**: OpenAI + Anthropic via Replit AI Integrations
+
+## Artifacts
+
+- **api-server**: Backend Express API server
+  - Serves health check at `/api/healthz`
+  - Proxy routes at `/v1/models`, `/v1/chat/completions`, `/v1/messages`
+  - Uses `PROXY_API_KEY` for authentication
+  - Uses `AI_INTEGRATIONS_OPENAI_BASE_URL/API_KEY` and `AI_INTEGRATIONS_ANTHROPIC_BASE_URL/API_KEY` for AI access
+- **api-portal**: Frontend React+Vite web app (preview at `/`)
+  - Shows available models, endpoints, and setup guide
+  - CherryStudio setup instructions
 
 ## Key Commands
 
@@ -26,31 +35,18 @@ This project is an AI API proxy server that exposes OpenAI-compatible endpoints 
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
+- `pnpm --filter @workspace/api-portal run dev` — run frontend locally
 
-## Proxy Endpoints
+## Environment Variables
 
-All proxy endpoints are mounted at `/v1` and require a `Bearer <PROXY_API_KEY>` or `x-api-key: <PROXY_API_KEY>` header.
+- `PROXY_API_KEY` (production): Auto-generated random 64-char hex key for API authentication
+- `AI_INTEGRATIONS_OPENAI_BASE_URL/API_KEY`: Auto-provisioned by Replit AI Integrations
+- `AI_INTEGRATIONS_ANTHROPIC_BASE_URL/API_KEY`: Auto-provisioned by Replit AI Integrations
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET    | /v1/models | List all available models |
-| POST   | /v1/chat/completions | OpenAI-compatible chat completions (supports OpenAI + Anthropic models) |
-| POST   | /v1/messages | Anthropic-native messages endpoint |
+## Security
 
-### Supported Models
-
-**OpenAI:** `gpt-5.2`, `gpt-5-mini`, `gpt-5-nano`, `o4-mini`, `o3`
-
-**Anthropic:** `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5`
-
-## Required Environment Variables / Secrets
-
-| Variable | Description |
-|----------|-------------|
-| `PROXY_API_KEY` | Secret key clients must send to authenticate |
-| `AI_INTEGRATIONS_OPENAI_BASE_URL` | Auto-set by Replit AI Integrations |
-| `AI_INTEGRATIONS_OPENAI_API_KEY` | Auto-set by Replit AI Integrations |
-| `AI_INTEGRATIONS_ANTHROPIC_BASE_URL` | Auto-set by Replit AI Integrations |
-| `AI_INTEGRATIONS_ANTHROPIC_API_KEY` | Auto-set by Replit AI Integrations |
+- The `PROXY_API_KEY` is set in the production environment only
+- All proxy routes require Bearer token or x-api-key header authentication
+- Keys are validated against the `PROXY_API_KEY` environment variable
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
